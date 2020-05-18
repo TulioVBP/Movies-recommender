@@ -574,8 +574,9 @@ def manipulate_data():
     
     window = sg.Window('Intruser',layout=layout_MD)
     button, values = window.Read()
-    if button is not None & button != 'C':
-        fun_dict[button]()
+    if button != None:
+        if button != 'C':
+            fun_dict[button]()
 
 def registered_users():
     sql_data = 'PRAGMA table_info( known_users )' # Query to obtain the tables' data 
