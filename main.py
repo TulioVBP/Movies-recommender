@@ -113,9 +113,14 @@ def read_from_db():
             sql = "SELECT * FROM " + table # SQL query
             df = pd.read_sql_query(sql, conn)
             data = df.values.tolist()
-            layout = layout + [[sg.Text(table.upper(),font=fonte)],[sg.Table(values=data, headings=header_list, display_row_numbers= False,
-                            auto_size_columns= True, num_rows=min(25,len(data)),font=fonte)],
-                            [sg.Button('Return',font=fonte)]]
+            if len(data)>0:
+                layout = layout + [[sg.Text(table.upper(),font=fonte)],[sg.Table(values=data, headings=header_list, display_row_numbers= False,
+                                auto_size_columns= True, num_rows=min(25,len(data)),font=fonte)],
+                                [sg.Button('Return',font=fonte)]]
+            else:
+                layout = layout + [[sg.Text('No table available.',font=fonte)],
+                                   [sg.Button('Return',font=fonte)]]
+
 
         window = sg.Window('Tables', grab_anywhere=False)
         event, values = window.Layout(layout).Read()
@@ -493,11 +498,14 @@ def loadTables():
     dict_fun = {0:movies_entry, 1:ratings_entry, 2:tags_entry, 3:links_entry, 4:genome_tags_entry, 5:genome_scores_entry}
     # Movies
     for jj in range(len(tables_names)):
-        df = pd.read_csv(pathFolder+'/'+tables_names[jj])
+        df = pd.read_csv(pathFolder+'/'+tables_names[jj],sep = ',')
         rows = df.index
-        value = [tuple(df.loc[ii,:]) for ii in rows]
+        if jj == 1:
+            value = [tuple([df.loc[ii,column] for column in df.columns]) for ii in rows]
+        else:
+            value = [tuple(df.loc[ii,:]) for ii in rows]
         dict_fun[jj](value)
-        print("Table"+tables_names[jj] +"loaded.")
+        print("Table "+tables_names[jj] +" loaded.")
     sg.popup_ok('All tables correctly loaded!')
 
 def delete_all():
@@ -548,18 +556,18 @@ def getRY():
 
 def get_user_avaliations(name, movieId, userId):
     layout_GUA = [[sg.Text("How do you rate " + name + "?",font=fonte)],
-                  [sg.DropDown([0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0],font=fonte)]
+                  [sg.DropDown([0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0],font=fonte, key = 'rating')],
                   [sg.Button('Rate',key = True),sg.Button('Return', key = False)]]
     
     # Create window
     window = sg.Window('Rate a movie',layout = layout_GUA)
     button, values = window.Read()
-    
-    rate = False
+    window.Close()
+
     if button:
-        rating = value
+        rating = values['rating']
         timestamp = time.time()
-        ratings_entry((userId, movieId, rating, timestamp))
+        ratings_entry([(float(userId), float(movieId), rating, timestamp)])
 
 # ------------- PySimpleGUI functions
 def manipulate_data():
@@ -617,6 +625,25 @@ def registered_users():
         known_users_entry([(userId,username)])
         sg.popup_scrolled('Your user ID is ' + str(userId),font=fonte)
     
+def enter_data():
+    known_users = pd.read_sql_query('SELECT * FROM known_users', conn)
+    movies = pd.read_sql_query('SELECT * FROM movies', conn)
+    #n_movies = 300
+    layout_ED = [[sg.Text('What is your user name?', font=fonte),sg.DropDown(values= known_users['username'].tolist(),font=fonte,key='chosen_user')],
+                 [sg.Text('What film do you want to rate?',font=fonte), sg.DropDown(values = movies['title'].tolist(),font=fonte, key='chosen_movie',size=(20,12))],
+                 [sg.Submit(font=fonte),sg.Cancel(font=fonte)]]
+    window  = sg.Window('Get movie name',layout=layout_ED)
+
+    button, values = window.Read()
+    
+    window.Close()
+
+    if button == 'Submit':
+        movieId = movies.loc[movies['title'] == values['chosen_movie'],'movieId']
+        userId = known_users.loc[known_users['username'] == values['chosen_user'],'userId']
+        get_user_avaliations(values['chosen_movie'], movieId, userId)
+
+
 
 
 class DefaultKeyDict(dict):
@@ -645,7 +672,7 @@ create_tables()
 
 
 # 2 - Run menu
-fun_dict = DefaultKeyDict(0 ,{0:print, 2:find_params, 3:recommendMovies , 4:registered_users , 5: manipulate_data})
+fun_dict = DefaultKeyDict(0 ,{0:print, 1:enter_data, 2:find_params, 3:recommendMovies , 4:registered_users , 5: manipulate_data})
 
 while True:
     layout_main = [[sg.Text('Movie prediction',font=fonte_tit)],
