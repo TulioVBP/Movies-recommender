@@ -79,6 +79,12 @@ def ratings_entry(values):
         c.execute("INSERT INTO ratings (userId,movieId, rating,timestamp) VALUES (?,?,?,?)",row)
     conn.commit()
 
+def ratings_update(values):
+    c.execute("BEGIN TRANSACTION")
+    for row in values:
+        c.execute("UPDATE ratings SET rating = ?, timestamp = ? WHERE  userId = ? AND movieId = ?",row)
+    conn.commit()
+
 def links_entry(values):
     c.execute("BEGIN TRANSACTION")
     for row in values:
@@ -165,6 +171,7 @@ def get_movies(movieId):
         nameList.append(name_of_movie[0][0])
     conn.commit()
     return nameList
+
 
 
 # ML functions
@@ -292,8 +299,12 @@ def normalizeRatings(Y, R):
     Ynorm = np.zeros(Y.shape)
     for i in range(m):
         idx = R[i, :] == 1
-        Ymean[i] = Y[i, idx].mean()
-        Ynorm[i, idx] = Y[i, idx] - Ymean[i]
+        if len(Y[i, idx]) > 0:
+            Ymean[i] = Y[i, idx].mean()
+            Ynorm[i, idx] = Y[i, idx] - Ymean[i]
+        else:
+            Ymean[i] = 0
+
     return Ynorm, Ymean
 
 def find_params():
@@ -315,31 +326,40 @@ def find_params():
     # 3.2 - Useful values
     num_users = Y.shape[1]
     num_movies = Y.shape[0]
-    num_features = 10
+    num_features = 30
+    
+    X = []
+    Theta = []    
+    J = [0]*5
+    for jj in range(5):
+        # 3.3 Initial values
+        X_temp = np.random.random((num_movies, num_features))
+        Theta_temp = np.random.random((num_users, num_features))
 
-    # 3.3 Initial values
-    X = np.random.random((num_movies, num_features))
-    Theta = np.random.random((num_users, num_features))
-
-    initial_parameters = np.concatenate( (X.ravel(), Theta.ravel()) )
-    # 3.4 Optimatimization
-    lambdaV = 10
-    m,n = X.shape
-    options_op = {'maxiter' :100,'disp': True}
-    Result = op.fmin_tnc(func = coFi_Cost_Function, 
-                                    x0 = initial_parameters, 
-                                    args = (Ynorm, R, num_users, num_movies,num_features, lambdaV),
-                                    disp = 5,
-                                    maxfun= 200)
-    optimal_par = Result[0]
-
-    X = optimal_par[0:num_movies*num_features]
-    X = X.reshape(num_movies, num_features)
-    Theta = optimal_par[num_movies*num_features:]
-    Theta = Theta.reshape(num_users, num_features)
-
+        initial_parameters = np.concatenate( (X_temp.ravel(), Theta_temp.ravel()) )
+        # 3.4 Optimatimization
+        lambdaV = 10
+        m,n = X_temp.shape
+        options_op = {'maxiter' :10,'disp': True}
+        Result = op.fmin_tnc(func = coFi_Cost_Function, 
+                                        x0 = initial_parameters, 
+                                        args = (Ynorm, R, num_users, num_movies,num_features, lambdaV),
+                                        disp = 5,
+                                        maxfun= 160)
+        optimal_par = Result[0]
+        
+        J[jj],grad = coFi_Cost_Function(optimal_par,Ynorm, R, num_users, num_movies,num_features, lambdaV)
+        print('Attempt '+ str(jj)+" : J = "+ str(J[jj]))
+        X_temp = optimal_par[0:num_movies*num_features]
+        X.append(X_temp.reshape(num_movies, num_features))
+        Theta_temp = optimal_par[num_movies*num_features:]
+        Theta.append(Theta_temp.reshape(num_users, num_features))
+    # 3.5 Find index of minimum J
+    J = np.array(J)
+    print(J.argmin())
+    min_index = J.argmin()
     # 4 Store data
-    data = { 'X' : X, 'Theta' : Theta, 'Ymean': Ymean }
+    data = { 'X' : X[min_index], 'Theta' : Theta[min_index], 'Ymean': Ymean }
 
     # Dump data to file
     hkl.dump(data, 'ml_parameters.hkl' )
@@ -355,7 +375,8 @@ def recommendMovies():
     Ymean = data['Ymean']
     
     # 2 - Ask who the user is
-    userId = sg.popup_get_text('What is your user ID?',font=fonte)
+    userId = get_userId()
+    #userId = sg.popup_get_text('What is your user ID?',font=fonte)
 
     # 3 - Get the parameters
     if userId != None:
@@ -372,7 +393,7 @@ def recommendMovies():
         sort_index = pred_score.argsort()
         l = len(pred_score)
         #index_top5 = np.argpartition(pred_score, -5)[-5:]
-        index_top5 = [np.where(sort_index == l-1-ii) for ii in range(5)]
+        index_top5 = [np.where(sort_index == l-1-ii) for ii in range(15)]
         top_movies_Id = [idb_movieId[row[0][0]] for row in index_top5]
         name_list = get_movies(top_movies_Id)
         name_vert = ''
@@ -555,19 +576,32 @@ def getRY():
     return R,Y
 
 def get_user_avaliations(name, movieId, userId):
-    layout_GUA = [[sg.Text("How do you rate " + name + "?",font=fonte)],
-                  [sg.DropDown([0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0],font=fonte, key = 'rating')],
-                  [sg.Button('Rate',key = True),sg.Button('Return', key = False)]]
-    
-    # Create window
-    window = sg.Window('Rate a movie',layout = layout_GUA)
-    button, values = window.Read()
-    window.Close()
+    # Check if such avaliation exists
+    A = c.execute('SELECT * FROM ratings WHERE userId = ? AND movieId = ?',(userId,movieId)).fetchall()
+    conn.commit()
+    update_movie = 'No'
+    b_proceed = True
+    if len(A)>0:
+        update_movie = sg.popup_yes_no('This user already rated this movie with ' + str(A[0][2]) + ' stars. Do you want to change this rating?', font=fonte)
+        if update_movie == 'No':
+            b_proceed = False
+    if b_proceed:
+        layout_GUA = [[sg.Text("How do you rate " + name + "?",font=fonte)],
+                    [sg.DropDown([0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0],font=fonte, key = 'rating')],
+                    [sg.Button('Rate',key = True),sg.Button('Return', key = False)]]
+        
+        # Create window
+        window = sg.Window('Rate a movie',layout = layout_GUA)
+        button, values = window.Read()
+        window.Close()
 
-    if button:
-        rating = values['rating']
-        timestamp = time.time()
-        ratings_entry([(float(userId), float(movieId), rating, timestamp)])
+        if button:
+            rating = values['rating']
+            timestamp = time.time()
+            if update_movie == 'No':
+                ratings_entry([(float(userId), float(movieId), rating, timestamp)])
+            else: 
+                ratings_update([(rating, timestamp, float(userId), float(movieId))])
 
 # ------------- PySimpleGUI functions
 def manipulate_data():
@@ -585,6 +619,7 @@ def manipulate_data():
     if button != None:
         if button != 'C':
             fun_dict[button]()
+    window.Close()
 
 def registered_users():
     sql_data = 'PRAGMA table_info( known_users )' # Query to obtain the tables' data 
@@ -598,7 +633,9 @@ def registered_users():
     if len(data)>0:
         layout = [[sg.Text("Registered users",font=fonte)],[sg.Table(values=data, headings=header_list, display_row_numbers= False,
                             auto_size_columns= True, num_rows=min(25,len(data)),font=fonte)],
-                            [sg.Button('Add an user',font=fonte,key = 'A') , sg.Button('Return',font=fonte)]]
+                            [sg.Button('Add an user',font=fonte,key = 'A')],
+                            [sg.Button('See rated movies',font=fonte,key = 'S')],
+                            [sg.Button('Return',font=fonte)]]
     else:
         layout = [[sg.Button('Add an user',font=fonte,key = 'A') , sg.Button('Return',font=fonte)]]
     
@@ -624,27 +661,78 @@ def registered_users():
 
         known_users_entry([(userId,username)])
         sg.popup_scrolled('Your user ID is ' + str(userId),font=fonte)
+    elif event == 'S':
+        layout = [[sg.Text('Choose the user:', font=fonte), sg.Listbox(values = df['username'].tolist(),font=fonte,key='user',enable_events=True,size=(20,10))],
+                   [sg.Button('Return',font=fonte,key='return')]]
+        window = sg.Window('Choose user').Layout(layout)
+        button, values = window.Read()
+        window.Close()
+        if button == 'user':
+            username = values['user'][0]
+            userId = df.loc[df['username']== username,'userId'].tolist()[0]
+
+            sql_data = 'PRAGMA table_info( ratings )' # Query to obtain the tables' data 
+            df2 = pd.read_sql_query(sql_data, conn)
+            header_list = df2.values[:,1] # Header list
+            header_list = header_list.tolist()
+            sql = "SELECT * FROM ratings WHERE userId = " + str(userId) # SQL query
+            df_new = pd.read_sql_query(sql, conn)
+            data = df_new.values.tolist()
+            if len(data)>0:
+                layout = [[sg.Text("Rated movies for " + username,font=fonte)],[sg.Table(values=data, headings=header_list, display_row_numbers= False,
+                                    auto_size_columns= True, num_rows=min(25,len(data)),font=fonte)],
+                                    [sg.Button('Return',font=fonte, key = 'r')]]
+            else:
+                layout = [[sg.Button('Rate a movie',font=fonte,key = 'rate') , sg.Button('Return',font=fonte, key='r')]]
+            window = sg.Window('Tables', grab_anywhere=False)
+            event, values = window.Layout(layout).Read()
+            window.Close()
+            # Space to improve here
+            print(username)   
     
 def enter_data():
     known_users = pd.read_sql_query('SELECT * FROM known_users', conn)
     movies = pd.read_sql_query('SELECT * FROM movies', conn)
-    #n_movies = 300
-    layout_ED = [[sg.Text('What is your user name?', font=fonte),sg.DropDown(values= known_users['username'].tolist(),font=fonte,key='chosen_user')],
-                 [sg.Text('What film do you want to rate?',font=fonte), sg.DropDown(values = movies['title'].tolist(),font=fonte, key='chosen_movie',size=(20,12))],
-                 [sg.Submit(font=fonte),sg.Cancel(font=fonte)]]
-    window  = sg.Window('Get movie name',layout=layout_ED)
-
-    button, values = window.Read()
     
+    names = movies['title'].tolist()
+    layout_ED = [[sg.Text('What is your user name?', font=fonte),sg.DropDown(values= known_users['username'].tolist(),font=fonte,key='chosen_user')],
+                 [sg.Text('What film do you want to rate?',font=fonte), sg.Input(do_not_clear=True, size=(20,1),enable_events=True, key='_INPUT_',font=fonte), 
+                 sg.Listbox(values = names,font=fonte,  enable_events=True, key='_LIST_',size=(40,12))],
+                 [sg.Button('Chrome',font=fonte),sg.Cancel(font=fonte)]]
+    window  = sg.Window('Get movie name',layout=layout_ED)
+    # Event Loop
+    while True:
+        event, values = window.Read()
+        if event is None or event == 'Cancel':              # always check for closed window
+            window.Close()              
+            break
+        if values['_INPUT_'] != '':                         # if a keystroke entered in search field
+            search = values['_INPUT_']
+            new_values = [x for x in names if search in x]  # do the filtering
+            window.Element('_LIST_').Update(new_values)     # display in the listbox
+        else:
+            window.Element('_LIST_').Update(names)          # display original unfiltered list
+        if event == '_LIST_' and len(values['_LIST_']):     # if a list item is chosen
+            window.Close()
+            movieId = movies.loc[movies['title'] == values['_LIST_'][0],'movieId']
+            userId = known_users.loc[known_users['username'] == values['chosen_user'],'userId']
+            get_user_avaliations(values['_LIST_'][0], movieId[0], userId[0])
+
+def get_userId():
+    sql = "SELECT * FROM known_users" # SQL query
+    df = pd.read_sql_query(sql, conn)
+    usernames = df['username'].tolist()
+    layout = [[sg.Text('Who do you want to use?',font = fonte)],
+              [sg.Listbox(values=usernames, font=fonte, key = 'chosen_user', enable_events = True, size=(20,10))],
+              [sg.Button('Exit',font=fonte, key = 'exit')]]
+    window = sg.Window('Get user ID').Layout(layout)
+    event, values = window.Read()
     window.Close()
-
-    if button == 'Submit':
-        movieId = movies.loc[movies['title'] == values['chosen_movie'],'movieId']
-        userId = known_users.loc[known_users['username'] == values['chosen_user'],'userId']
-        get_user_avaliations(values['chosen_movie'], movieId, userId)
-
-
-
+    if event == 'chosen_user':
+        username = values['chosen_user'][0]
+        userId = df.loc[df['username'] == username,'userId'].tolist()[0]
+        return userId
+        
 
 class DefaultKeyDict(dict):
     def __init__(self, default_key, *args, **kwargs):
@@ -681,12 +769,12 @@ while True:
                     [sg.Button('3 - Recommend movies',font=fonte,key=3)],
                     [sg.Button('4 - Registered users',font=fonte,key=4)],
                     [sg.Button('5 - Manipulate tables',font = fonte, key = 5)],
-                    [sg.Cancel(font = fonte)]]
+                    [sg.Button('Exit',font = fonte,key = '_EXIT_')]]
     window = sg.Window('Movie prediction',layout=layout_main)
     button, value = window.Read()
     window.Close()
     fun_dict[button]()
-    if button is None:
+    if button is None or button == '_EXIT_':
         break
 
 c.close()
