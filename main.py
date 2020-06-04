@@ -716,7 +716,7 @@ def enter_data():
             window.Close()
             movieId = movies.loc[movies['title'] == values['_LIST_'][0],'movieId']
             userId = known_users.loc[known_users['username'] == values['chosen_user'],'userId']
-            get_user_avaliations(values['_LIST_'][0], movieId[0], userId[0])
+            get_user_avaliations(values['_LIST_'][0], movieId.tolist()[0], userId.tolist()[0])
 
 def get_userId():
     sql = "SELECT * FROM known_users" # SQL query
